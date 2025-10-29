@@ -1,0 +1,4 @@
+# FABRIC_STREAMLIT_APP/packages.txt
+unixodbc-dev
+msodbcsql18
+mssql-tools18

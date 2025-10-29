@@ -1,0 +1,12 @@
+# FABRIC_STREAMLIT_APP/.gitignore
+
+# Ambiente Virtual
+.venv/
+venv/
+
+# Arquivo de Segredos Local
+.streamlit/secrets.toml
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
