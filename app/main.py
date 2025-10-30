@@ -29,7 +29,7 @@ except KeyError:
 # Determina o driver correto baseado no sistema operacional
 # O Streamlit Cloud roda em Linux
 if platform.system() == "Linux":
-    DRIVER = '{ODBC Driver 18 for SQL Server}'
+    DRIVER = '{ODBC Driver 17 for SQL Server}'
 else:
     # Assumindo Windows para desenvolvimento local
     DRIVER = '{ODBC Driver 18 for SQL Server}' # Verifique se este é o driver que você tem instalado!
