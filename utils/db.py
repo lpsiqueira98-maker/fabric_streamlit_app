@@ -1,80 +1,104 @@
-# utils/db.py
-# conexões com fabric via pyodbc
-# usa st.secrets (ou env vars) — seguro pra deploy no streamlit cloud
-
-import os
 import pyodbc
 import streamlit as st
+import platform
+import pandas as pd
 
-def _get_secrets():
-    """
-    retorna um dict com credenciais: tenta st.secrets['database'] primeiro,
-    depois variáveis de ambiente.
-    """
-    if 'database' in st.secrets:
-        return st.secrets['database']
-    # fallback para env vars (útil em dev)
-    return {
-        "driver": os.getenv("DB_DRIVER"),
-        "server": os.getenv("DB_SERVER"),
-        "database": os.getenv("DB_DATABASE"),
-        "username": os.getenv("DB_USERNAME"),
-        "password": os.getenv("DB_PASSWORD"),
-        "connection_string": os.getenv("DB_CONNECTION_STRING")
-    }
+# Importa as *funções* que constroem as strings de SQL
+from queries.predefined_queries import (
+    get_customer_search_query,
+    get_sales_by_month_query,
+    get_sales_by_dept_query
+)
+
+# --- CONFIGURAÇÃO E CONEXÃO ---
 
 @st.cache_resource
-def get_pyodbc_connection():
+def get_db_connection():
     """
-    cria e retorna uma conexão pyodbc.
-    usa connection_string se presente, senão monta com driver/server/credenciais.
-    cache_resource evita reconexões desnecessárias em sessões streamlit.
+    Estabelece uma conexão com o banco de dados e a retorna.
+    Usa @st.cache_resource para manter a conexão viva.
     """
-    s = _get_secrets()
-    conn_str = s.get("connection_string")
-    if conn_str:
-        conn = pyodbc.connect(conn_str, autocommit=True)
-        return conn
-
-    driver = s.get("driver") or "{ODBC Driver 18 for SQL Server}"
-    server = s.get("server")
-    database = s.get("database")
-    uid = s.get("username")
-    pwd = s.get("password")
-    # auth pode ser 'ActiveDirectoryPassword' ou None, dependendo do setup
-    auth = s.get("auth")
-
-    # montar connection string segura
-    if auth:
-        # exemplo: usar auth quando for AAD
-        conn_string = (
-            f"DRIVER={{{driver}}};"
-            f"SERVER={server};DATABASE={database};"
-            f"UID={uid};PWD={pwd};Authentication={auth}"
-        )
-    else:
-        conn_string = (
-            f"DRIVER={{{driver}}};"
-            f"SERVER={server};DATABASE={database};UID={uid};PWD={pwd}"
-        )
-
-    conn = pyodbc.connect(conn_string, autocommit=True)
-    return conn
-
-def query_to_df(sql: str, params=None):
-    """
-    executa query e retorna pandas.DataFrame.
-    simples, legível, e com tratamento mínimo de erros.
-    """
-    import pandas as pd
-    conn = get_pyodbc_connection()
     try:
-        if params:
-            df = pd.read_sql_query(sql, conn, params=params)
-        else:
-            df = pd.read_sql_query(sql, conn)
-    finally:
-        # não fechamos a conexão cacheada aqui — streamlit reusa
-        pass
-    return df
+        server = st.secrets["fabric"]["server"]
+        database = st.secrets["fabric"]["database"]
+        username = st.secrets["fabric"]["username"]
+        password = st.secrets["fabric"]["password"]
+    except KeyError:
+        st.error("Credenciais do Fabric não encontradas! Verifique seus segredos.")
+        st.stop()
 
+    # Detecção automática do driver
+    if platform.system() == "Linux":
+        DRIVER = '{ODBC Driver 17 for SQL Server}'
+    else:
+        DRIVER = '{ODBC Driver 18 for SQL Server}'
+
+    conn_string = f'DRIVER={DRIVER};SERVER={server};DATABASE={database};UID={username};PWD={password};Authentication=ActiveDirectoryPassword;TrustServerCertificate=yes'
+    
+    try:
+        conn = pyodbc.connect(conn_string, timeout=30)
+        return conn
+    except pyodbc.Error as e:
+        st.error(f"Erro ao conectar no Fabric: {e}")
+        st.stop()
+
+def run_query(query, params=None):
+    """
+    Executa uma query SQL com parâmetros seguros e retorna uma lista de dicionários.
+    """
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            # Converte o resultado para lista de dicionários
+            columns = [column[0] for column in cursor.description]
+            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            return results
+            
+    except pyodbc.Error as e:
+        st.error(f"Erro inesperado em run_query: {e}")
+        return [] # Retorna lista vazia em caso de erro
+
+# --- FUNÇÕES DE BUSCA DE CUSTOMER (Página Menu) ---
+
+def find_customer(nome=None, cpf=None, conta=None):
+    """
+    Busca clientes no banco de dados usando os critérios fornecidos.
+    """
+    query, params = get_customer_search_query(nome, cpf, conta)
+    
+    if query:
+        return run_query(query, params)
+    return []
+
+# --- FUNÇÕES DE BUSCA DO HISTÓRICO (Página Histórico) ---
+
+@st.cache_data(ttl=600) # Cache de 10 minutos
+def fetch_sales_by_month(customer_cta):
+    """
+    Busca o histórico de vendas mensais para um cliente específico (por 'conta').
+    Retorna um DataFrame.
+    """
+    query, params = get_sales_by_month_query(customer_cta)
+    
+    if query:
+        data = run_query(query, params)
+        return pd.DataFrame(data)
+    return pd.DataFrame()
+
+@st.cache_data(ttl=600) # Cache de 10 minutos
+def fetch_sales_by_dept(customer_cta):
+    """
+    Busca o histórico de vendas por departamento para um cliente (por 'conta').
+    Retorna um DataFrame.
+    """
+    query, params = get_sales_by_dept_query(customer_cta)
+    
+    if query:
+        data = run_query(query, params)
+        return pd.DataFrame(data)
+    return pd.DataFrame()
